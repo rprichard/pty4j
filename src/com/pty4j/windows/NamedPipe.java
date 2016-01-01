@@ -7,104 +7,86 @@ import com.sun.jna.ptr.IntByReference;
 import java.io.IOException;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * @author traff
  */
 public class NamedPipe {
-  private WinNT.HANDLE myHandle;
+  private volatile WinNT.HANDLE myHandle;
 
-  private boolean writeNotify = false;
-  private boolean wrote = false;
-  private boolean readNotify = false;
+  private AtomicBoolean spinLock = new AtomicBoolean();
 
   public NamedPipe(WinNT.HANDLE handle) {
     myHandle = handle;
   }
 
-  public boolean write(byte[] buf, int len) throws IOException {
-    boolean wSuccess = false;
+  public void write(byte[] buf, int len) throws IOException {
     if (len < 0) {
       len = 0;
     }
     try {
-      while (readNotify) {
-      }//wait for read to finished
-      writeNotify = true;
+      while (spinLock.getAndSet(true)) {
+        Thread.yield();
+      }
+      if (myHandle == null) {
+        return;
+      }
       write0(myHandle, buf, len);
-      wrote = true;
     }
     catch (IOException e) {
       throw new IOException("IO Exception while writing to the pipe.", e);
     }
     finally {
-      writeNotify = false;
+      spinLock.set(false);
     }
-    return wSuccess;
   }
 
   public int read(byte[] buf, int len) throws IOException {
-    int byteTransfer = -1;
     if (len < 0) {
       len = 0;
     }
     long curLength = 0;
     while (curLength == 0) {
       if (myHandle == null) {
-        return 0;
+        return -1;
       }
       try {
+        // It is a little hazardout to call PeekNamedPipe on a HANDLE that
+        // could concurrently become closed (and reopened as a different
+        // object), but acquiring the spin lock (or a full lock) has its own
+        // hazards.
         curLength = available(myHandle);
+        if (curLength < 0) {
+          return -1;
+        }
       }
       catch (IOException e) {
-        curLength = -1;
+        return -1;
       }
       try {
         Thread.sleep(20);
       }
       catch (InterruptedException e) {
-        curLength = -1;
+        return -1;
       }
     }
-    //handle exceptions
-    if (curLength == -1) {
-      return byteTransfer;
+    //incoming stream. read now
+    try {
+      while (spinLock.getAndSet(true)) {
+        Thread.yield();
+      }
+      if (myHandle == null) {
+        return -1;
+      }
+      return read0(myHandle, buf, len);
     }
-    if (!wrote && curLength > 0) {
-      //incoming stream. read now
-      try {
-        while (writeNotify) {
-        }//wait for write to finish
-        readNotify = true;
-        byteTransfer = read0(myHandle, buf, len);
-      }
-      catch (IOException e) {
-        throw new IOException("IO Exception while reading from the pipe.", e);
-      }
-      finally {
-        readNotify = false;
-      }
+    catch (IOException e) {
+      throw new IOException("IO Exception while reading from the pipe.", e);
     }
-    else if (wrote && curLength > 0) {
-      //input stream available. read now
-      try {
-        while (writeNotify) {
-        }//wait for write to finish
-        readNotify = true;
-        byteTransfer = read0(myHandle, buf, len);
-      }
-      catch (IOException e) {
-        throw new IOException("IO Exception while reading from the pipe.", e);
-      }
-      finally {
-        wrote = false;
-        readNotify = false;
-      }
+    finally {
+      spinLock.set(false);
     }
-    else {
-      //unknown condition
-    }
-    return byteTransfer;
   }
 
   public int available() throws IOException {
@@ -151,14 +133,21 @@ public class NamedPipe {
   }
 
   public void close() throws IOException {
-    if (myHandle == null) {
-      return;
+    try {
+      while (spinLock.getAndSet(true)) {
+        Thread.yield();
+      }
+      if (myHandle == null) {
+        return;
+      }
+      boolean status = close0(myHandle);
+      if (!status) {
+        throw new IOException("Close error:" + Kernel32.INSTANCE.GetLastError());
+      }
+      myHandle = null;
+    } finally {
+       spinLock.set(false);
     }
-    boolean status = close0(myHandle);
-    if (!status) {
-      throw new IOException("Close error:" + Kernel32.INSTANCE.GetLastError());
-    }
-    myHandle = null;
   }
 
   public static boolean close0(WinNT.HANDLE handle) throws IOException {

@@ -70,10 +70,10 @@ public class WinPty {
       return;
     }
 
-    INSTANCE.winpty_close(myWinpty);
-
     myNamedPipe.markClosed();
     if (myErrNamedPipe != null) myErrNamedPipe.markClosed();
+
+    INSTANCE.winpty_close(myWinpty);
 
     myClosed = true;
   }
