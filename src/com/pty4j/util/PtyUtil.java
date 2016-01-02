@@ -77,6 +77,10 @@ public class PtyUtil {
 
       lib = lib.exists() ? lib : resolveNativeLibrary(new File(libFolder, "libpty"));
 
+      if (!lib.exists() && PTY_LIB_FOLDER != null) {
+        lib = new File(libFolder, getNativeLibraryName());
+      }
+
       if (!lib.exists()) {
         throw new IllegalStateException(String.format("Couldn't find %s, jar folder %s", lib.getName(),
                 libFolder.getAbsolutePath()));
@@ -129,7 +133,7 @@ public class PtyUtil {
     if (Platform.isMac()) {
       result = "libpty.dylib";
     } else if (Platform.isWindows()) {
-      result = "libwinpty.dll";
+      result = "winpty.dll";
     } else if (Platform.isLinux()) {
       result = "libpty.so";
     } else {

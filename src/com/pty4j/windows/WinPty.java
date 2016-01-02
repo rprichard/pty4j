@@ -2,15 +2,17 @@ package com.pty4j.windows;
 
 import com.pty4j.PtyException;
 import com.pty4j.WinSize;
+import com.pty4j.unix.Pty;
 import com.pty4j.util.PtyUtil;
-import com.sun.jna.Library;
-import com.sun.jna.Native;
-import com.sun.jna.Structure;
+import com.sun.jna.*;
+import com.sun.jna.platform.win32.Kernel32;
 import com.sun.jna.platform.win32.WinBase;
 import com.sun.jna.platform.win32.WinNT;
 import com.sun.jna.ptr.IntByReference;
+import com.sun.jna.ptr.PointerByReference;
 import jtermios.windows.WinAPI;
 
+import java.io.*;
 import java.nio.Buffer;
 import java.util.Arrays;
 import java.util.List;
@@ -19,50 +21,93 @@ import java.util.List;
  * @author traff
  */
 public class WinPty {
-  private final winpty_t myWinpty;
+  private final Pointer myWinpty;
+  private final WinNT.HANDLE myProcess;
 
-  private NamedPipe myNamedPipe;
-  private NamedPipe myErrNamedPipe;
+  private FileOutputStream coninPipe;
+  private FileInputStream conoutPipe;
   private boolean myClosed = false;
 
 
   public WinPty(String cmdline, String cwd, String env, boolean consoleMode) throws PtyException {
     int cols = Integer.getInteger("win.pty.cols", 80);
     int rows = Integer.getInteger("win.pty.rows", 25);
-    
-    myWinpty = INSTANCE.winpty_open(cols, rows, consoleMode);
 
-    if (myWinpty == null) {
-      throw new PtyException("winpty is null");
+    Pointer agentCfg = null;
+    Pointer wp = null;
+    Pointer spawnCfg = null;
+    Pointer coninName = null;
+    Pointer conoutName = null;
+
+    try {
+      // Agent startup configuration
+      agentCfg = INSTANCE.winpty_config_new(consoleMode ? WinPtyLib.WINPTY_FLAG_PLAIN_TEXT : 0, null, null);
+      if (agentCfg == null) {
+        throw new PtyException("winpty cfg is null");
+      }
+      if (!INSTANCE.winpty_config_set_initial_size(agentCfg, cols, rows, null, null)) {
+        throw new PtyException("winpty cfg set_initial_size failed");
+      }
+
+      // Connect to the agent.  These file open commands should fail instantly if they are going to fail.
+      wp = INSTANCE.winpty_open(agentCfg, null, null);
+      if (wp == null) {
+        throw new PtyException("could not open winpty");
+      }
+      try {
+        coninPipe = new FileOutputStream(readWStr(coninName = INSTANCE.winpty_conin_name(wp)));
+        conoutPipe = new FileInputStream(readWStr(conoutName = INSTANCE.winpty_conout_name(wp)));
+      } catch (FileNotFoundException e) {
+        throw new PtyException("could not connect to CONIN/CONOUT winpty pipes");
+      }
+
+      // Spawn a child process from the agent.
+      spawnCfg = INSTANCE.winpty_spawn_config_new(
+              WinPtyLib.WINPTY_SPAWN_FLAG_AUTO_SHUTDOWN,
+              null, toWString(cmdline), toWString(cwd), toWString(env), null, null);
+      if (spawnCfg == null) {
+        throw new PtyException("winpty spawn cfg is null");
+      }
+
+      WinNT.HANDLEByReference process = new WinNT.HANDLEByReference();
+
+      if (!INSTANCE.winpty_spawn(wp, spawnCfg, process.getPointer(), null, null, null, null)) {
+        throw new PtyException("Error running process");
+      }
+
+      // Success!
+      myWinpty = wp;
+      myProcess = process.getValue();
+      wp = null;
+
+      // Insert a dummy call to getPointer(), which returns the underlying
+      // Memory object.  The call is harmless at worst; at best, it works
+      // around a JNA/GC bug where Memory objects tend to get GC'd prematurely.
+      // See https://groups.google.com/forum/#!topic/jna-users/dCPnztnQnRw.
+      process.getPointer();
+
+    } finally {
+      INSTANCE.winpty_config_free(agentCfg);
+      INSTANCE.winpty_free(wp);
+      INSTANCE.winpty_spawn_config_free(spawnCfg);
+      INSTANCE.winpty_wstr_free(coninName);
+      INSTANCE.winpty_wstr_free(conoutName);
     }
-
-    int c;
-
-    char[] cmdlineArray = cmdline != null ? toCharArray(cmdline) : null;
-    char[] cwdArray = cwd != null ? toCharArray(cwd) : null;
-    char[] envArray = env != null ? toCharArray(env) : null;
-
-    if ((c = INSTANCE.winpty_start_process(myWinpty, null, cmdlineArray, cwdArray, envArray)) != 0) {
-      throw new PtyException("Error running process:" + c);
-
-    }
-
-    myNamedPipe = new NamedPipe(myWinpty.dataPipe);
-    if (consoleMode) myErrNamedPipe = new NamedPipe(myWinpty.errDataPipe);
   }
 
-  private static char[] toCharArray(String string) {
-    char[] array = new char[string.length() + 1];
-    System.arraycopy(string.toCharArray(), 0, array, 0, string.length());
-    array[string.length()] = 0;
-    return array;
+  private static String readWStr(Pointer ptr) {
+    return ptr.getWideString(0);
+  }
+
+  private static WString toWString(String string) {
+    return string == null ? null : new WString(string);
   }
 
   public void setWinSize(WinSize winSize) {
     if (myClosed) {
       return;
     }
-    INSTANCE.winpty_set_size(myWinpty, winSize.ws_col, winSize.ws_row);
+    INSTANCE.winpty_set_size(myWinpty, winSize.ws_col, winSize.ws_row, null, null);
   }
 
   public void close() {
@@ -70,10 +115,8 @@ public class WinPty {
       return;
     }
 
-    INSTANCE.winpty_close(myWinpty);
-
-    myNamedPipe.markClosed();
-    if (myErrNamedPipe != null) myErrNamedPipe.markClosed();
+    INSTANCE.winpty_free(myWinpty);
+    Kernel32.INSTANCE.CloseHandle(myProcess);
 
     myClosed = true;
   }
@@ -82,34 +125,32 @@ public class WinPty {
     if (myClosed) {
       return -2;
     }
-    return INSTANCE.winpty_get_exit_code(myWinpty);
-  }
-
-  public NamedPipe getInputPipe() {
-    return myNamedPipe;
-  }
-
-  public NamedPipe getOutputPipe() {
-    return myNamedPipe;
-  }
-
-  public NamedPipe getErrorPipe() {
-    return myErrNamedPipe;
-  }
-
-  public static class winpty_t extends Structure {
-
-    private static final List __FIELDS = Arrays.asList("controlPipe", "dataPipe", "errDataPipe", "open");
-
-    public WinNT.HANDLE controlPipe;
-    public WinNT.HANDLE dataPipe;
-    public WinNT.HANDLE errDataPipe;
-    public boolean open;
-
-    @Override
-    protected List getFieldOrder() {
-      return __FIELDS;
+    IntByReference codeOut = new IntByReference();
+    if (Kernel32.INSTANCE.GetExitCodeProcess(myProcess, codeOut)) {
+      int code = codeOut.getValue();
+      codeOut.getPointer();
+      if (code == WinNT.STILL_ACTIVE) {
+        return -1;
+      } else {
+        return code;
+      }
+    } else {
+      return -1;
     }
+  }
+
+  public InputStream getInputPipe() {
+    return conoutPipe;
+  }
+
+  public OutputStream getOutputPipe() {
+    return coninPipe;
+  }
+
+  public InputStream getErrorPipe() {
+    // TODO: Implement this...
+    return null;
+    //return myErrNamedPipe;
   }
 
   public static final Kern32 KERNEL32 = (Kern32)Native.loadLibrary("kernel32", Kern32.class);
@@ -161,55 +202,25 @@ public class WinPty {
 
   interface WinPtyLib extends Library {
     /*
-    * winpty API.
-    */
-
-    /*
-     * Starts a new winpty instance with the given size.
-     *
-     * This function creates a new agent process and connects to it.
+     * winpty API.
      */
-    winpty_t winpty_open(int cols, int rows, boolean consoleMode);
 
-    /*
-     * Start a child process.  Either (but not both) of appname and cmdline may
-     * be NULL.  cwd and env may be NULL.  env is a pointer to an environment
-     * block like that passed to CreateProcess.
-     *
-     * This function never modifies the cmdline, unlike CreateProcess.
-     *
-     * Only one child process may be started.  After the child process exits, the
-     * agent will scrape the console output one last time, then close the data pipe
-     * once all remaining data has been sent.
-     *
-     * Returns 0 on success or a Win32 error code on failure.
-     */
-    int winpty_start_process(winpty_t pc,
-                             char[] appname,
-                             char[] cmdline,
-                             char[] cwd,
-                             char[] env);
+    int WINPTY_FLAG_PLAIN_TEXT = 1;
+    int WINPTY_SPAWN_FLAG_AUTO_SHUTDOWN = 1;
 
-    /*
-     * Returns the exit code of the process started with winpty_start_process,
-     * or -1 none is available.
-     */
-    int winpty_get_exit_code(winpty_t pc);
-
-    /*
-     * Returns an overlapped-mode pipe handle that can be read and written
-     * like a Unix terminal.
-     */
-    WinAPI.HANDLE winpty_get_data_pipe(winpty_t pc);
-
-    /*
-     * Change the size of the Windows console.
-     */
-    int winpty_set_size(winpty_t pc, int cols, int rows);
-
-    /*
-     * Closes the winpty.
-     */
-    void winpty_close(winpty_t pc);
+    void winpty_wstr_free(Pointer str);
+    Pointer winpty_config_new(int flags, Pointer err_code, Pointer err_msg);
+    void winpty_config_free(Pointer cfg);
+    boolean winpty_config_set_initial_size(Pointer cfg, int cols, int rows, Pointer err_code, Pointer err_msg);
+    Pointer winpty_open(Pointer cfg, Pointer err_code, Pointer err_msg);
+    Pointer winpty_conin_name(Pointer wp);
+    Pointer winpty_conout_name(Pointer wp);
+    Pointer winpty_spawn_config_new(int winptyFlags, WString appname, WString cmdline, WString cwd, WString env,
+                                    Pointer err_code, Pointer err_msg);
+    void winpty_spawn_config_free(Pointer cfg);
+    boolean winpty_spawn(Pointer wp, Pointer cfg, Pointer processHandleOut, Pointer threadHandleOut,
+                         Pointer createProcessErrorOut, Pointer err_code, Pointer err_msg);
+    boolean winpty_set_size(Pointer wp, int cols, int rows, Pointer err_code, Pointer err_msg);
+    void winpty_free(Pointer wp);
   }
 }

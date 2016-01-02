@@ -4,6 +4,7 @@ import com.google.common.base.Joiner;
 import com.pty4j.PtyException;
 import com.pty4j.PtyProcess;
 import com.pty4j.WinSize;
+import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -14,7 +15,7 @@ import java.io.OutputStream;
  */
 public class WinPtyProcess extends PtyProcess {
   private final WinPty myWinPty;
-  private final WinPTYInputStream myInputStream;
+  private final InputStream myInputStream;
   private final InputStream myErrorStream;
   private final WinPTYOutputStream myOutputStream;
 
@@ -34,12 +35,13 @@ public class WinPtyProcess extends PtyProcess {
 
   public WinPtyProcess(String[] command, String environment, String workingDirectory, boolean consoleMode) throws IOException {
     try {
+      // TODO: Is this doing Win32 command escaping/quoting?  It seems unlikely...
       myWinPty = new WinPty(Joiner.on(" ").join(command), workingDirectory, environment, consoleMode);
     }
     catch (PtyException e) {
       throw new IOException("Couldn't create PTY", e);
     }
-    myInputStream = new WinPTYInputStream(myWinPty.getInputPipe());
+    myInputStream = myWinPty.getInputPipe();
     myOutputStream = new WinPTYOutputStream(myWinPty.getOutputPipe(), consoleMode, true);
     if (!consoleMode) {
       myErrorStream = new InputStream() {
@@ -50,7 +52,8 @@ public class WinPtyProcess extends PtyProcess {
       };
     }
     else {
-      myErrorStream = new WinPTYInputStream(myWinPty.getErrorPipe());
+      throw new RuntimeException("NOPE");
+      //myErrorStream = new WinPTYInputStream(myWinPty.getErrorPipe());
     }
   }
 
@@ -86,6 +89,7 @@ public class WinPtyProcess extends PtyProcess {
 
   @Override
   public int waitFor() throws InterruptedException {
+    // TODO: Should we wait on the process handle instead?
     for (; ; ) {
       int exitCode = myWinPty.exitValue();
       if (exitCode != -1) {

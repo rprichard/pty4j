@@ -164,12 +164,12 @@ public class CygwinPtyProcess extends PtyProcess {
 
   @Override
   public OutputStream getOutputStream() {
-    return new WinPTYOutputStream(myInputPipe);
+    return new CygwinOutputStream(myInputPipe);
   }
 
   @Override
   public InputStream getInputStream() {
-    return new WinPTYInputStream(myOutputPipe);
+    return new CygwinInputStream(myOutputPipe);
   }
 
   @Override
@@ -182,7 +182,7 @@ public class CygwinPtyProcess extends PtyProcess {
         }
       };
     }
-    return new WinPTYInputStream(myErrorPipe);
+    return new CygwinInputStream(myErrorPipe);
   }
 
   @Override

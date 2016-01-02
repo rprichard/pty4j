@@ -11,6 +11,7 @@ import com.sun.jna.platform.win32.Advapi32Util;
 import java.io.File;
 import java.io.IOException;
 import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * Process with pseudo-terminal(PTY).
@@ -70,6 +71,12 @@ public abstract class PtyProcess extends Process {
 
   public static PtyProcess exec(String[] command, Map<String, String> environment, String workingDirectory, boolean console, boolean cygwin,
                                 File logFile) throws IOException {
+    if (environment == null) {
+      // HACK(rprichard): Surely this is the wrong behavior, but it matches
+      // what I see the UnixPtyProcess do.  I would *expect* a null
+      // environment to mean a default environment, not an empty environment.
+      environment = new TreeMap<String, String>();
+    }
     if (Platform.isWindows()) {
       if (cygwin) {
         return new CygwinPtyProcess(command, environment, workingDirectory, logFile, console);

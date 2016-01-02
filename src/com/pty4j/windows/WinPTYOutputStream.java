@@ -11,16 +11,16 @@ import java.io.IOException;
 import java.io.OutputStream;
 
 public class WinPTYOutputStream extends OutputStream {
-  private final NamedPipe myNamedPipe;
+  private final OutputStream myNamedPipe;
   private boolean myClosed;
   private final boolean myPatchNewline;
   private final boolean mySendEOFInsteadClose;
 
-  public WinPTYOutputStream(NamedPipe namedPipe) {
+  public WinPTYOutputStream(OutputStream namedPipe) {
     this(namedPipe, false, false);
   }
 
-  public WinPTYOutputStream(NamedPipe namedPipe, boolean patchNewline, boolean sendEOFInsteadClose) {
+  public WinPTYOutputStream(OutputStream namedPipe, boolean patchNewline, boolean sendEOFInsteadClose) {
     myNamedPipe = namedPipe;
     myPatchNewline = patchNewline;
     mySendEOFInsteadClose = sendEOFInsteadClose;
@@ -62,7 +62,7 @@ public class WinPTYOutputStream extends OutputStream {
       System.arraycopy(b, off, tmpBuf, 0, len);
     }
 
-    myNamedPipe.write(tmpBuf, len);
+    myNamedPipe.write(tmpBuf, 0, len);
   }
 
   @Override
