@@ -3,9 +3,11 @@ package com.pty4j.windows;
 import com.pty4j.PtyProcess;
 import com.pty4j.WinSize;
 import com.pty4j.util.PtyUtil;
+import com.sun.jna.Native;
 import com.sun.jna.platform.win32.WinBase;
 import com.sun.jna.platform.win32.WinError;
 import com.sun.jna.platform.win32.WinNT;
+import com.sun.jna.ptr.IntByReference;
 
 import java.io.File;
 import java.io.IOException;
@@ -114,27 +116,20 @@ public class CygwinPtyProcess extends PtyProcess {
   private static void waitForPipe(WinNT.HANDLE handle) throws IOException {
     WinNT.HANDLE connectEvent = KERNEL32.CreateEventA(null, true, false, null);
 
-    WinBase.OVERLAPPED povl = new WinBase.OVERLAPPED();
+    WinNT.OVERLAPPED povl = new WinNT.OVERLAPPED();
     povl.hEvent = connectEvent;
+    povl.write();
 
-    boolean success = KERNEL32.ConnectNamedPipe(handle, povl);
-    if (!success) {
-      switch (KERNEL32.GetLastError()) {
-        case WinError.ERROR_PIPE_CONNECTED:
-          success = true;
-          break;
-        case WinError.ERROR_IO_PENDING:
-          if (KERNEL32.WaitForSingleObject(connectEvent, CONNECT_PIPE_TIMEOUT) != WinBase.WAIT_OBJECT_0) {
-            KERNEL32.CancelIo(handle);
-
-            success = false;
-          }
-          else {
-            success = true;
-          }
-
-          break;
+    boolean success = KERNEL32.ConnectNamedPipe(handle, povl.getPointer());
+    if (!success && Native.getLastError() == WinNT.ERROR_IO_PENDING) {
+      if (KERNEL32.WaitForSingleObject(connectEvent, CONNECT_PIPE_TIMEOUT) != WinNT.WAIT_OBJECT_0) {
+        KERNEL32.CancelIo(handle);
       }
+      IntByReference actual = new IntByReference();
+      success = KERNEL32.GetOverlappedResult(handle, povl.getPointer(), actual, true);
+    }
+    if (!success && Native.getLastError() == WinNT.ERROR_PIPE_CONNECTED) {
+      success = true;
     }
 
     KERNEL32.CloseHandle(connectEvent);

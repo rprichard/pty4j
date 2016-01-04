@@ -138,13 +138,11 @@ public class WinPty {
                                   int nDefaultTimeout,
                                   WinBase.SECURITY_ATTRIBUTES securityAttributes);
 
-    boolean ConnectNamedPipe(WinNT.HANDLE hNamedPipe, WinBase.OVERLAPPED overlapped);
+    boolean ConnectNamedPipe(WinNT.HANDLE hNamedPipe, Pointer overlapped);
 
     boolean CloseHandle(WinNT.HANDLE hObject);
 
     WinNT.HANDLE CreateEventA(WinBase.SECURITY_ATTRIBUTES lpEventAttributes, boolean bManualReset, boolean bInitialState, String lpName);
-
-    int GetLastError();
 
     int WaitForSingleObject(WinNT.HANDLE hHandle, int dwMilliseconds);
 
