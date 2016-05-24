@@ -59,6 +59,13 @@ public class WinPty {
     return array;
   }
 
+  public int getChildProcessId() {
+    if (myClosed) {
+      return -1;
+    }
+    return INSTANCE.winpty_get_child_process_id(myWinpty);
+  }
+
   public void setWinSize(WinSize winSize) {
     if (myClosed) {
       return;
@@ -216,5 +223,7 @@ public class WinPty {
      * Closes the winpty.
      */
     void winpty_close(winpty_t pc);
+
+    int winpty_get_child_process_id(winpty_t pc);
   }
 }

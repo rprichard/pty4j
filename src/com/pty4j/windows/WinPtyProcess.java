@@ -91,6 +91,10 @@ public class WinPtyProcess extends PtyProcess {
         myWinPty.setWinSize(winSize);
     }
 
+    public int getChildProcessId () {
+        return myWinPty.getChildProcessId();
+    }
+
     @Override
     public WinSize getWinSize() throws IOException {
         return null; //TODO
